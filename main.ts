@@ -1,9 +1,10 @@
-// news-image-20261122 — a one-day front page, drawn entirely from code.
-// Sunday 22 November 2026: COP31 collapses in Antalya; Iran strikes Bahrain;
-// a Russian missile hits Kryvyi Rih; Mexico captures "El Chapo Isidro";
-// markets slide into correction. No assets, no network, no fonts from disk:
-// a hand-built 5x7 bitmap font, a tiny PNG encoder, and a broadsheet layout.
-// Deterministic: the same input always produces the same bytes.
+// news-image-20261122 — v2: the whole world of Sunday 22 November 2026
+// on one page. Thirty-six dated stories organised by region under a
+// single masthead: the COP31 collapse in Antalya leads, then Europe,
+// the Middle East, Asia-Pacific, the Americas, Africa, sport & science,
+// a markets strip and an in-brief band. Drawn entirely from code — a
+// hand-built 5x7 bitmap font, flat vector illustration, a tiny PNG
+// encoder. No assets, no network, deterministic byte-identical output.
 //
 // Run: mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
@@ -13,20 +14,36 @@ import { join } from "node:path";
 
 const W = 1024;
 const H = 1024;
+const MX = 28; // page margin
+const CW = W - 2 * MX; // 968 content width
 
 // ---------------------------------------------------------------- palette
-const PAPER = [247, 242, 228, 255] as const;
-const INK = [20, 18, 16, 255] as const;
-const RED = [168, 30, 34, 255] as const;
-const BLUE = [44, 74, 107, 255] as const;
-const SKY = [198, 222, 235, 255] as const;
-const LAND = [96, 140, 92, 255] as const;
-const GREY = [120, 116, 106, 255] as const;
-const GOLD = [176, 132, 52, 255] as const;
-const WHITE = [255, 255, 255, 255] as const;
-const DARK = [38, 38, 40, 255] as const;
-
 type RGBA = readonly [number, number, number, number];
+const PAPER: RGBA = [246, 241, 227, 255];
+const CARD: RGBA = [255, 253, 244, 255];
+const INK: RGBA = [22, 24, 29, 255];
+const BODY: RGBA = [52, 50, 46, 255];
+const RED: RGBA = [176, 30, 40, 255];
+const GOLD: RGBA = [201, 151, 63, 255];
+const GREY: RGBA = [111, 106, 94, 255];
+const WHITE: RGBA = [255, 255, 255, 255];
+
+const EUROPE: RGBA = [31, 78, 121, 255];
+const MIDEAST: RGBA = [179, 92, 30, 255];
+const ASIA: RGBA = [163, 22, 52, 255];
+const AMERICAS: RGBA = [30, 112, 64, 255];
+const AFRICA: RGBA = [106, 61, 154, 255];
+const SPORTSCI: RGBA = [15, 118, 110, 255];
+
+function tint(c: RGBA, f: number): RGBA {
+  // mix colour c toward PAPER by fraction f
+  return [
+    Math.round(c[0] + (PAPER[0] - c[0]) * f),
+    Math.round(c[1] + (PAPER[1] - c[1]) * f),
+    Math.round(c[2] + (PAPER[2] - c[2]) * f),
+    255,
+  ];
+}
 
 // ---------------------------------------------------------------- canvas
 const px = new Uint8Array(W * H * 4);
@@ -62,10 +79,6 @@ function hline(x: number, y: number, w: number, c: RGBA, t = 1): void {
   fillRect(x, y, w, t, c);
 }
 
-function vline(x: number, y: number, h: number, c: RGBA, t = 1): void {
-  fillRect(x, y, t, h, c);
-}
-
 function line(x0: number, y0: number, x1: number, y1: number, c: RGBA): void {
   const dx = Math.abs(x1 - x0);
   const dy = -Math.abs(y1 - y0);
@@ -89,18 +102,6 @@ function line(x0: number, y0: number, x1: number, y1: number, c: RGBA): void {
   }
 }
 
-function poly(points: Array<[number, number]>, c: RGBA, thick = 1): void {
-  for (let i = 0; i + 1 < points.length; i++) {
-    const [x0, y0] = points[i];
-    const [x1, y1] = points[i + 1];
-    line(x0, y0, x1, y1, c);
-    if (thick > 1) {
-      line(x0, y0 + 1, x1, y1 + 1, c);
-      line(x0 + 1, y0, x1 + 1, y1, c);
-    }
-  }
-}
-
 function disc(cx: number, cy: number, r: number, c: RGBA): void {
   for (let y = -r; y <= r; y++)
     for (let x = -r; x <= r; x++)
@@ -111,13 +112,34 @@ function ring(cx: number, cy: number, r: number, c: RGBA, t = 2): void {
   for (let a = 0; a < 720; a++) {
     const th = (a / 720) * Math.PI * 2;
     for (let k = 0; k < t; k++)
-      setPixel(Math.round(cx + (r - k) * Math.cos(th)), Math.round(cy + (r - k) * Math.sin(th)), c);
+      setPixel(
+        Math.round(cx + (r - k) * Math.cos(th)),
+        Math.round(cy + (r - k) * Math.sin(th)),
+        c,
+      );
   }
 }
 
-// filled circle clipped to a disc, used for the globe's land blobs
-function blobInDisc(cx: number, cy: number, r: number, pts: Array<[number, number]>, c: RGBA): void {
-  // scanline fill of a polygon, then clip to the disc
+// thick polyline: stamps a filled disc of radius r along each segment
+function stroke(points: Array<[number, number]>, r: number, c: RGBA): void {
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [x0, y0] = points[i];
+    const [x1, y1] = points[i + 1];
+    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+    for (let s = 0; s <= steps; s++) {
+      const x = Math.round(x0 + ((x1 - x0) * s) / steps);
+      const y = Math.round(y0 + ((y1 - y0) * s) / steps);
+      disc(x, y, r, c);
+    }
+  }
+}
+
+// scanline polygon fill, optionally clipped to a disc
+function fillPoly(
+  pts: Array<[number, number]>,
+  c: RGBA,
+  clip?: { cx: number; cy: number; r: number },
+): void {
   let minY = Infinity;
   let maxY = -Infinity;
   for (const [, y] of pts) {
@@ -136,21 +158,48 @@ function blobInDisc(cx: number, cy: number, r: number, pts: Array<[number, numbe
     xs.sort((a, b) => a - b);
     for (let k = 0; k + 1 < xs.length; k += 2) {
       for (let x = Math.ceil(xs[k]); x <= Math.floor(xs[k + 1]); x++) {
-        const dx = x - cx;
-        const dy = y - cy;
-        if (dx * dx + dy * dy <= r * r) setPixel(x, y, c);
+        if (clip) {
+          const dx = x - clip.cx;
+          const dy = y - clip.cy;
+          if (dx * dx + dy * dy > clip.r * clip.r) continue;
+        }
+        setPixel(x, y, c);
       }
     }
   }
 }
 
+// vertical gradient in flat bands (keeps the PNG lean)
+function vGradient(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  top: RGBA,
+  bot: RGBA,
+  bands: number,
+): void {
+  const bh = Math.ceil(h / bands);
+  for (let b = 0; b < bands; b++) {
+    const f = bands === 1 ? 0 : b / (bands - 1);
+    const c: RGBA = [
+      Math.round(top[0] + (bot[0] - top[0]) * f),
+      Math.round(top[1] + (bot[1] - top[1]) * f),
+      Math.round(top[2] + (bot[2] - top[2]) * f),
+      255,
+    ];
+    const yy = y + b * bh;
+    if (yy < y + h) fillRect(x, yy, w, Math.min(bh, y + h - yy), c);
+  }
+}
+
 // ---------------------------------------------------------------- 5x7 font
-// Each glyph: 7 rows of 5 bits, written as strings for readability.
+// Each glyph: 7 rows of 5 pixels, drawn as strings.
 const FONT: Record<string, string[]> = {
   A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
   B: ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
   C: ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
-  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  D: ["11100", "10010", "10001", "10001", "10001", "10010", "11100"],
   E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
   F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
   G: ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
@@ -160,7 +209,7 @@ const FONT: Record<string, string[]> = {
   K: ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
   L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
   M: ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
-  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  N: ["10001", "10001", "11001", "10101", "10011", "10001", "10001"],
   O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
   P: ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
   Q: ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
@@ -168,25 +217,26 @@ const FONT: Record<string, string[]> = {
   S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
   T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
   U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+  "\u00dc": ["01010", "00000", "10001", "10001", "10001", "10001", "01110"],
   V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
-  W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
-  X: ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
-  Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+  W: ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
+  X: ["10001", "10010", "01010", "00100", "01010", "10010", "10001"],
+  Y: ["10001", "10001", "10001", "01010", "00100", "00100", "00100"],
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
   a: ["00000", "00000", "01110", "00001", "01111", "10001", "01111"],
-  b: ["10000", "10000", "11110", "10001", "10001", "10001", "11110"],
+  b: ["10000", "10000", "10110", "11001", "10001", "10001", "11110"],
   c: ["00000", "00000", "01110", "10001", "10000", "10001", "01110"],
-  d: ["00001", "00001", "01111", "10001", "10001", "10001", "01111"],
+  d: ["00001", "00001", "01101", "10011", "10001", "10001", "01111"],
   e: ["00000", "00000", "01110", "10001", "11111", "10000", "01110"],
   f: ["00110", "01001", "01000", "11110", "01000", "01000", "01000"],
-  g: ["00000", "01111", "10001", "10001", "01111", "00001", "01110"],
-  h: ["10000", "10000", "11110", "10001", "10001", "10001", "10001"],
+  g: ["00000", "00000", "01111", "10001", "10001", "01111", "00001"],
+  h: ["10000", "10000", "10110", "11001", "10001", "10001", "10001"],
   i: ["00100", "00000", "01100", "00100", "00100", "00100", "01110"],
   j: ["00010", "00000", "00110", "00010", "00010", "10010", "01100"],
-  k: ["10000", "10000", "10010", "10100", "11000", "10100", "10010"],
+  k: ["10000", "10000", "10100", "11000", "10100", "10010", "10001"],
   l: ["01100", "00100", "00100", "00100", "00100", "00100", "01110"],
   m: ["00000", "00000", "11010", "10101", "10101", "10101", "10101"],
-  n: ["00000", "00000", "11110", "10001", "10001", "10001", "10001"],
+  n: ["00000", "00000", "10110", "11001", "10001", "10001", "10001"],
   o: ["00000", "00000", "01110", "10001", "10001", "10001", "01110"],
   p: ["00000", "00000", "11110", "10001", "10001", "11110", "10000"],
   q: ["00000", "00000", "01111", "10001", "10001", "01111", "00001"],
@@ -205,10 +255,10 @@ const FONT: Record<string, string[]> = {
   "3": ["11111", "00010", "00100", "00010", "00001", "10001", "01110"],
   "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
   "5": ["11111", "10000", "11110", "00001", "00001", "10001", "01110"],
-  "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+  "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
   "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
   "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-  "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
   " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
   ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
   ",": ["00000", "00000", "00000", "00000", "01100", "00100", "01000"],
@@ -230,7 +280,8 @@ const FONT: Record<string, string[]> = {
   "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
   "=": ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
   $: ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
-  "\u2022": ["00000", "01100", "01100", "01100", "00000", "00000", "00000"],
+  "\u00b7": ["00000", "00000", "00000", "01100", "01100", "00000", "00000"],
+  "\u2022": ["00000", "00000", "01100", "01100", "01100", "00000", "00000"],
   "*": ["00000", "10101", "01110", "11111", "01110", "10101", "00000"],
 };
 
@@ -241,12 +292,32 @@ function glyph(ch: string): string[] {
   return FONT[ch] ?? FONT["?"];
 }
 
-function textWidth(text: string, scale: number): number {
-  // 6 units per char (5 + 1 tracking), minus the trailing tracking
-  return text.length === 0 ? 0 : (text.length * 6 - 1) * scale;
+// advance per character: 5 glyph columns + 1 tracking column, plus
+// any extra letterspacing, all in units of the scale
+function advance(scale: number, track = 0): number {
+  return 6 * scale + track;
 }
 
-function drawText(x: number, y: number, text: string, scale: number, c: RGBA): void {
+function textWidth(text: string, scale: number, track = 0): number {
+  if (text.length === 0) return 0;
+  return text.length * advance(scale, track) - scale - track;
+}
+
+interface TextOpts {
+  bold?: boolean;
+  track?: number;
+}
+
+function drawText(
+  x: number,
+  y: number,
+  text: string,
+  scale: number,
+  c: RGBA,
+  opts: TextOpts = {},
+): void {
+  const adv = advance(scale, opts.track ?? 0);
+  const boldOff = opts.bold ? Math.max(1, Math.ceil(scale / 4)) : 0;
   let cx = x;
   for (const ch of text) {
     const g = glyph(ch);
@@ -254,25 +325,45 @@ function drawText(x: number, y: number, text: string, scale: number, c: RGBA): v
       for (let col = 0; col < GLYPH_W; col++) {
         if (g[r][col] === "1") {
           fillRect(cx + col * scale, y + r * scale, scale, scale, c);
+          if (boldOff > 0)
+            fillRect(cx + col * scale + boldOff, y + r * scale, scale, scale, c);
         }
       }
     }
-    cx += 6 * scale;
+    cx += adv;
   }
 }
 
-function drawTextCentered(cx: number, y: number, text: string, scale: number, c: RGBA): void {
-  drawText(cx - Math.floor(textWidth(text, scale) / 2), y, text, scale, c);
+function drawTextCentered(
+  cx: number,
+  y: number,
+  text: string,
+  scale: number,
+  c: RGBA,
+  opts: TextOpts = {},
+): void {
+  drawText(cx - Math.floor(textWidth(text, scale, opts.track ?? 0) / 2), y, text, scale, c, opts);
 }
 
-// Greedy word wrap on pixel width.
-function wrap(text: string, maxW: number, scale: number): string[] {
+function drawTextRight(
+  xr: number,
+  y: number,
+  text: string,
+  scale: number,
+  c: RGBA,
+  opts: TextOpts = {},
+): void {
+  drawText(xr - textWidth(text, scale, opts.track ?? 0), y, text, scale, c, opts);
+}
+
+// greedy word wrap on pixel width
+function wrap(text: string, maxW: number, scale: number, track = 0): string[] {
   const words = text.split(" ");
   const lines: string[] = [];
   let cur = "";
   for (const w of words) {
     const next = cur === "" ? w : cur + " " + w;
-    if (textWidth(next, scale) <= maxW) {
+    if (textWidth(next, scale, track) <= maxW) {
       cur = next;
     } else {
       if (cur !== "") lines.push(cur);
@@ -283,244 +374,251 @@ function wrap(text: string, maxW: number, scale: number): string[] {
   return lines;
 }
 
-function drawPara(x: number, y: number, text: string, scale: number, maxW: number, c: RGBA, leading: number): number {
-  const lines = wrap(text, maxW, scale);
+function drawPara(
+  x: number,
+  y: number,
+  text: string,
+  scale: number,
+  maxW: number,
+  c: RGBA,
+  leading: number,
+  opts: TextOpts = {},
+): number {
+  const lines = wrap(text, maxW, scale, opts.track ?? 0);
   let yy = y;
   for (const ln of lines) {
-    drawText(x, yy, ln, scale, c);
+    drawText(x, yy, ln, scale, c, opts);
     yy += leading;
   }
   return yy;
 }
 
 // ---------------------------------------------------------------- the page
-const M = 30; // outer margin
-const CW = W - 2 * M; // 964 content width
-
 function drawMasthead(): void {
-  // double rule above the nameplate
-  hline(M, 34, CW, INK, 3);
-  hline(M, 40, CW, INK, 1);
-  drawTextCentered(W / 2, 50, "ONE DAY'S NEWS  -  IN ONE IMAGE", 2, GREY);
-  drawTextCentered(W / 2, 74, "THE WORLD TODAY", 8, INK);
-  hline(M, 142, CW, INK, 1);
-  // date line with side notes
-  drawText(M, 152, "No. 22", 2, GREY);
-  drawTextCentered(W / 2, 152, "SUNDAY, 22 NOVEMBER 2026", 3, RED);
-  const right = "SUNDAY EDITION";
-  drawText(W - M - textWidth(right, 2), 152, right, 2, GREY);
-  hline(M, 178, CW, INK, 3);
+  // dark nameplate band
+  fillRect(MX, 26, CW, 90, INK);
+  drawTextCentered(W / 2, 36, "ONE DAY'S NEWS \u2014 IN ONE IMAGE", 2, GOLD, { track: 2 });
+  drawTextCentered(W / 2, 56, "THE WORLD TODAY", 8, WHITE, { bold: true });
+  drawTextRight(W - MX - 10, 38, "SOURCES: AP, REUTERS, AFP, BBC", 1, GOLD);
+  // red date strip
+  fillRect(MX, 120, CW, 28, RED);
+  drawText(MX + 12, 127, "No. 22", 2, WHITE);
+  drawTextCentered(W / 2, 126, "SUNDAY, 22 NOVEMBER 2026", 3, WHITE, { bold: true });
+  drawTextRight(W - MX - 12, 127, "36 STORIES", 2, WHITE, { bold: true });
 }
 
-// Lead story: the COP31 collapse, with a cracked globe illustration.
+// Lead: COP31 collapse in Antalya, with a burning, cracked globe.
 function drawLead(): void {
-  const y0 = 192;
-  drawText(M, y0, "CLIMATE  -  COP31 ENDS WITH NO DEAL, ANTALYA", 2, RED);
-  drawText(M, y0 + 22, "CLIMATE TALKS", 7, INK);
-  drawText(M, y0 + 74, "COLLAPSE", 7, INK);
-  hline(M, y0 + 128, 560, INK, 1);
+  const y0 = 156;
+  drawText(MX, y0 + 2, "CLIMATE SUMMIT \u2014 ANTALYA, T\u00dcRKIYE", 2, RED, { bold: true });
+  drawText(MX, y0 + 22, "CLIMATE TALKS COLLAPSE", 5, INK, { bold: true });
+  hline(MX, y0 + 64, 640, INK, 2);
   drawPara(
-    M,
-    y0 + 140,
-    "The EU rejects a draft with no mention of fossil fuels, and the COP31 summit ends in Antalya with no agreement at all.",
+    MX,
+    y0 + 72,
+    "The EU rejects a draft that never names fossil fuels, and the longest climate talks in UN history end with no agreement \u2014 two days past their deadline.",
     2,
-    540,
-    INK,
-    20,
+    700,
+    BODY,
+    17,
   );
-  drawPara(
-    M,
-    y0 + 206,
-    "Two days past deadline, negotiators leave empty-handed. The final text never named fossil fuels - and Europe said no.",
-    2,
-    540,
-    GREY,
-    20,
-  );
+  drawText(MX, y0 + 126, "Nearly 200 nations; fossil fuels the breaking point", 2, GREY);
 
-  // illustration panel: cracked globe under smoke, red NO DEAL tag
-  const px0 = 610;
-  const py0 = 196;
-  const pw = W - M - px0; // 384
-  const ph = 236;
-  frame(px0, py0, pw, ph, INK, 2);
-  fillRect(px0 + 2, py0 + 2, pw - 4, ph - 4, SKY);
-  // smoke puffs
-  disc(px0 + 90, py0 + 46, 16, GREY);
-  disc(px0 + 118, py0 + 34, 20, GREY);
-  disc(px0 + 150, py0 + 48, 14, GREY);
-  disc(px0 + 262, py0 + 40, 15, GREY);
-  disc(px0 + 290, py0 + 54, 11, GREY);
-  // globe
-  const gx = px0 + 192;
-  const gy = py0 + 138;
-  const gr = 62;
-  disc(gx, gy, gr, [214, 231, 240, 255]);
-  blobInDisc(gx, gy, gr, [[gx - 48, gy - 30], [gx - 18, gy - 44], [gx + 2, gy - 20], [gx - 8, gy + 2], [gx - 40, gy - 6]], LAND);
-  blobInDisc(gx, gy, gr, [[gx + 8, gy + 12], [gx + 34, gy + 2], [gx + 48, gy + 26], [gx + 22, gy + 40], [gx + 2, gy + 30]], LAND);
-  blobInDisc(gx, gy, gr, [[gx - 30, gy + 26], [gx - 6, gy + 20], [gx - 2, gy + 44], [gx - 26, gy + 50]], LAND);
-  // latitude lines
-  for (const dy of [-30, 0, 30]) {
-    const half = Math.floor(Math.sqrt(gr * gr - dy * dy));
-    hline(gx - half, gy + dy, half * 2, BLUE, 1);
-  }
-  ring(gx, gy, gr, INK, 3);
-  // the crack, in red
-  poly(
-    [
-      [gx - 46, gy - 58],
-      [gx - 22, gy - 30],
-      [gx - 38, gy - 6],
-      [gx - 8, gy + 18],
-      [gx - 26, gy + 42],
-      [gx - 2, gy + 60],
-    ],
-    RED,
-    3,
+  // illustration: smoke-dark sky over a cracked, burning planet
+  const ax = 748;
+  const ay = y0;
+  const aw = W - MX - ax; // 248
+  const ah = 140;
+  vGradient(ax, ay, aw, ah, [35, 38, 44, 255], [122, 58, 30, 255], 12);
+  frame(ax, ay, aw, ah, INK, 2);
+  // smoke plumes
+  const smoke: RGBA = [126, 121, 113, 255];
+  disc(ax + 52, ay + 20, 10, smoke);
+  disc(ax + 74, ay + 12, 13, smoke);
+  disc(ax + 98, ay + 22, 8, smoke);
+  disc(ax + 176, ay + 16, 9, smoke);
+  disc(ax + 196, ay + 26, 7, smoke);
+  // the planet
+  const gx = ax + 124;
+  const gy = ay + 60;
+  const gr = 50;
+  const ocean: RGBA = [46, 95, 120, 255];
+  const land: RGBA = [74, 128, 72, 255];
+  disc(gx, gy, gr, ocean);
+  const clip = { cx: gx, cy: gy, r: gr };
+  fillPoly(
+    [[gx - 40, gy - 28], [gx - 14, gy - 40], [gx + 4, gy - 18], [gx - 6, gy + 2], [gx - 36, gy - 4]],
+    land,
+    clip,
   );
-  // NO DEAL tag
-  fillRect(px0 + 96, py0 + 196, 192, 30, RED);
-  drawTextCentered(px0 + 192, py0 + 203, "NO DEAL", 2, WHITE);
+  fillPoly(
+    [[gx + 10, gy + 8], [gx + 34, gy - 2], [gx + 44, gy + 22], [gx + 20, gy + 36], [gx + 4, gy + 26]],
+    land,
+    clip,
+  );
+  fillPoly(
+    [[gx - 28, gy + 22], [gx - 6, gy + 16], [gx - 2, gy + 38], [gx - 24, gy + 44]],
+    land,
+    clip,
+  );
+  ring(gx, gy, gr, INK, 3);
+  // the crack, glowing: ember halo, red core, yellow heart
+  const crack: Array<[number, number]> = [
+    [gx - 24, gy - 44],
+    [gx - 10, gy - 24],
+    [gx - 22, gy - 4],
+    [gx - 4, gy + 16],
+    [gx - 16, gy + 34],
+    [gx, gy + 45],
+  ];
+  stroke(crack, 3, [232, 106, 23, 255]);
+  stroke(crack, 2, [193, 39, 45, 255]);
+  stroke(crack, 0, [255, 197, 61, 255]);
+  // skyline silhouette along the bottom
+  const sil: RGBA = [18, 18, 22, 255];
+  fillRect(ax + 2, ay + ah - 28, aw - 4, 26, sil);
+  fillRect(ax + 14, ay + ah - 38, 26, 12, sil);
+  fillRect(ax + 54, ay + ah - 44, 18, 18, sil);
+  fillRect(ax + 182, ay + ah - 40, 30, 14, sil);
+  // NO DEAL tag across the planet's base
+  fillRect(gx - 60, ay + 106, 120, 24, RED);
+  drawTextCentered(gx, ay + 111, "NO DEAL", 2, WHITE, { bold: true });
 }
 
-// Two-column story block.
-function drawStory(
+// Markets strip: the correction, in big red numbers.
+function drawMarkets(): void {
+  const y0 = 302;
+  const hh = 80;
+  fillRect(MX, y0, CW, hh, CARD);
+  frame(MX, y0, CW, hh, INK, 2);
+  drawText(MX + 16, y0 + 10, "MARKETS \u2014 NEW YORK", 2, RED, { bold: true });
+  drawText(MX + 16, y0 + 28, "STOCKS SLIDE", 3, INK, { bold: true });
+  drawText(MX + 16, y0 + 52, "INTO CORRECTION", 3, INK, { bold: true });
+  const groups: Array<[string, string, number]> = [
+    ["S&P 500", "-3.7%", 84],
+    ["NASDAQ", "-5.3%", 120],
+    ["NIKKEI", "-5.1%", 116],
+  ];
+  groups.forEach(([name, val, barW], i) => {
+    const gx = 330 + i * 226;
+    drawText(gx + 18, y0 + 6, name, 2, BODY, { bold: true });
+    // down triangle
+    fillPoly(
+      [
+        [gx, y0 + 32],
+        [gx + 12, y0 + 32],
+        [gx + 6, y0 + 42],
+      ],
+      RED,
+    );
+    drawText(gx + 18, y0 + 22, val, 5, RED, { bold: true });
+    fillRect(gx + 18, y0 + 59, barW, 6, RED);
+  });
+  drawText(348, y0 + 68, "AI SELL-OFF SPREADS", 1, GREY);
+}
+
+// One region panel: coloured header, then headline + one-line items.
+interface Item {
+  h: string;
+  s: string;
+}
+
+function drawRegion(
   x: number,
   y: number,
   w: number,
-  kicker: string,
-  head1: string,
-  head2: string,
-  body: string,
-  art: () => void,
-): number {
-  drawText(x, y, kicker, 2, RED);
-  drawText(x, y + 22, head1, 4, INK);
-  drawText(x, y + 54, head2, 4, INK);
-  hline(x, y + 88, w, INK, 1);
-  const end = drawPara(x, y + 98, body, 2, w, INK, 20);
-  art();
-  return end;
+  h: number,
+  color: RGBA,
+  title: string,
+  items: Item[],
+): void {
+  fillRect(x, y, w, h, tint(color, 0.9));
+  frame(x, y, w, h, INK, 1);
+  fillRect(x, y, w, 30, color);
+  drawText(x + 10, y + 8, title, 2, WHITE, { bold: true });
+  drawTextRight(x + w - 10, y + 8, `${items.length} STORIES`, 2, WHITE);
+  let yy = y + 40;
+  for (const it of items) {
+    const headLines = wrap(it.h, w - 20, 2);
+    for (const ln of headLines) {
+      drawText(x + 10, yy, ln, 2, INK, { bold: true });
+      yy += 16;
+    }
+    yy += 2;
+    const sumLines = wrap(it.s, w - 20, 1);
+    for (const ln of sumLines) {
+      drawText(x + 10, yy, ln, 1, BODY);
+      yy += 10;
+    }
+    yy += 7;
+  }
 }
 
-function drawRow2(): void {
-  const y0 = 462;
-  const colW = 472;
-  // left: Bahrain
-  drawStory(
-    M,
-    y0,
-    colW,
-    "THE GULF  -  BAHRAIN",
-    "IRAN STRIKES",
-    "BAHRAIN SITE",
-    "Iranian projectiles hit an industrial site in Bahrain, injuring two people. Gulf states condemn the attack as the region's war widens.",
-    () => {
-      // blast starburst
-      const bx = M + 410;
-      const by = y0 + 30;
-      for (let k = 0; k < 12; k++) {
-        const a = (k / 12) * Math.PI * 2;
-        line(bx, by, Math.round(bx + 26 * Math.cos(a)), Math.round(by + 26 * Math.sin(a)), GOLD);
-      }
-      disc(bx, by, 10, RED);
-      disc(bx, by, 5, GOLD);
-    },
-  );
-  vline(W / 2, y0, 178, INK, 1);
-  // right: Ukraine
-  drawStory(
-    W / 2 + 20,
-    y0,
-    colW,
-    "UKRAINE  -  KRYVYI RIH",
-    "MISSILE KILLS",
-    "TWO, WOUNDS 60",
-    "A Russian missile hits Zelenskyy's hometown, killing a 7-year-old boy and a 20-year-old woman. A drone strike near Kyiv leaves 14 missing.",
-    () => {
-      // broken skyline
-      const bx = W - M - 96;
-      const by = y0 + 16;
-      fillRect(bx, by + 18, 18, 34, DARK);
-      fillRect(bx + 24, by + 6, 18, 46, DARK);
-      fillRect(bx + 48, by + 26, 18, 26, DARK);
-      poly([[bx + 24, by + 6], [bx + 33, by - 6], [bx + 42, by + 6]], RED, 2);
-      line(bx + 33, by - 6, bx + 60, by - 14, RED);
-      disc(bx + 62, by - 16, 4, RED);
-    },
-  );
-}
+function drawRegions(): void {
+  const colW = 312;
+  const colX = [MX, MX + 328, MX + 656];
+  const rowH = 274;
+  const row1 = 388;
+  const row2 = 672;
 
-function drawRow3(): void {
-  const y0 = 664;
-  const colW = 472;
-  // left: Mexico
-  drawStory(
-    M,
-    y0,
-    colW,
-    "MEXICO  -  SINALOA",
-    "CARTEL BOSS",
-    "CAPTURED",
-    "Special forces seize Fausto Isidro Meza Flores, 'El Chapo Isidro', in a raid that leaves 11 dead, including four soldiers.",
-    () => {
-      // handcuffs: two rings joined by a bar
-      const bx = M + 396;
-      const by = y0 + 30;
-      ring(bx, by, 13, INK, 3);
-      ring(bx + 34, by, 13, INK, 3);
-      hline(bx + 10, by - 2, 16, INK, 4);
-    },
-  );
-  vline(W / 2, y0, 178, INK, 1);
-  // right: markets with a bar chart
-  drawText(W / 2 + 20, y0, "MARKETS  -  NEW YORK", 2, RED);
-  drawText(W / 2 + 20, y0 + 22, "STOCKS SLIDE", 4, INK);
-  drawText(W / 2 + 20, y0 + 54, "INTO CORRECTION", 4, INK);
-  hline(W / 2 + 20, y0 + 88, colW, INK, 1);
-  // chart: three red bars, values as % falls, caption below
-  const cx = W / 2 + 20;
-  const base = y0 + 150;
-  const bars: Array<[string, string, number]> = [
-    ["S&P 500", "-3.7%", 24],
-    ["NASDAQ", "-5.3%", 34],
-    ["NIKKEI", "-5.1%", 33],
-  ];
-  hline(cx, base, 300, INK, 2);
-  bars.forEach(([label, val, h], i) => {
-    const bx = cx + 12 + i * 100;
-    fillRect(bx, base - h, 56, h, RED);
-    drawText(bx + 2, base - h - 16, val, 2, RED);
-    drawText(bx, base + 8, label, 2, INK);
-  });
-  drawText(cx, y0 + 178, "AI sell-off spreads on Friday.", 2, INK);
+  drawRegion(colX[0], row1, colW, rowH, EUROPE, "EUROPE", [
+    { h: "MISSILE KILLS TWO, WOUNDS 60", s: "Russian strike on Zelenskyy's hometown" },
+    { h: "BOY, 7, PULLED ALIVE FROM RUBBLE", s: "Dymer apartment strike: 11 dead, 14 missing" },
+    { h: "RUSSIAN SHIP BURNS", s: "Cargo vessel hit by drone in Gulf of Finland" },
+    { h: "FRANCE MARCHES AGAIN", s: "150,000 march again over cost of living" },
+    { h: "BELGIUM STRIKE GROUNDS FLIGHTS", s: "Air traffic walkout cancels flights nationwide" },
+  ]);
+  drawRegion(colX[1], row1, colW, rowH, MIDEAST, "MIDDLE EAST", [
+    { h: "IRAN STRIKES BAHRAIN SITE", s: "Projectiles hit industrial site, injuring two" },
+    { h: "AID TRUCK STRUCK IN GAZA", s: "Strike kills three; witnesses say truck carried aid" },
+    { h: "SETTLERS TORCH 12 VEHICLES", s: "West Bank attacks; Israel opens an inquiry" },
+    { h: "QATAR IN TEHRAN TALKS", s: "Doha mediates in push to end the war" },
+    { h: "ISRAEL COALITION TALKS", s: "Eisenkot and Netanyahu in government talks" },
+  ]);
+  drawRegion(colX[2], row1, colW, rowH, ASIA, "ASIA-PACIFIC", [
+    { h: "FACTORY FIRE KILLS THREE", s: "Cikande candy plant, Indonesia; 36 missing" },
+    { h: "KOREA MINISTER QUITS", s: "Education chief resigns over exam cheating chaos" },
+    { h: "THAI COURT UPHOLDS CONVICTION", s: "Royal defamation term cut to three years" },
+    { h: "EU-INDONESIA TRADE DEAL", s: "Brussels and Jakarta sign after years of talks" },
+    { h: "KOREA EXPORTS DOUBLE", s: "Shipments surge in November's first 20 days" },
+    { h: "BUS AND TANKER COLLIDE", s: "Pakistan: 10 killed on Makran coastal highway" },
+  ]);
+  drawRegion(colX[0], row2, colW, rowH, AMERICAS, "AMERICAS", [
+    { h: "CARTEL BOSS CAPTURED", s: "Sinaloa raid seizes 'El Chapo Isidro'; 11 dead" },
+    { h: "ICE SEIZES TWO ON JET BRIDGE", s: "Father and daughter held at Seattle airport" },
+    { h: "TRUMP ORDER ON CONGRESS", s: "Contractors must flag inquiries to White House" },
+    { h: "DEMOCRATS SEAL HOUSE MAJORITY", s: "Biggest since 1992 as North Carolina flips" },
+    { h: "BRAZIL STORM KILLS THREE", s: "162 injured as storms batter the south" },
+  ]);
+  drawRegion(colX[1], row2, colW, rowH, AFRICA, "AFRICA", [
+    { h: "FUNERAL BOAT CAPSIZES", s: "Nigeria: boat to a funeral overturns in Bayelsa, 24 dead" },
+    { h: "DRONES HIT UN BUILDING", s: "Khartoum: four killed, UN building hit" },
+    { h: "UKRAINE DRONES HIT WARSHIP", s: "Russian ship struck at Libya's Benghazi base" },
+    { h: "EBOLA AID BLOCKED BY FIGHTING", s: "DRC: insecurity stalls response, aid group warns" },
+    { h: "OIL PIPELINE LOSSES", s: "Libya counts $30.8m in pipeline losses" },
+  ]);
+  drawRegion(colX[2], row2, colW, rowH, SPORTSCI, "SPORT & SCIENCE", [
+    { h: "LIVERPOOL ROUT MAN UNITED 4-0", s: "Nightmare first game for Pochettino" },
+    { h: "VERSTAPPEN WINS IN LAS VEGAS", s: "Grand Prix victory under the lights" },
+    { h: "ALCARAZ TAKES ATP FINALS", s: "Spaniard beats Zverev for the Turin title" },
+    { h: "PROBE REACHES MERCURY ORBIT", s: "BepiColombo arrives; ESA reports a glitch" },
+    { h: "EARTH GAINS A MINI-MOON", s: "NASA: tiny asteroid caught in orbit" },
+  ]);
 }
 
 function drawInBrief(): void {
-  const y0 = 862;
-  fillRect(M, y0, CW, 100, DARK);
-  drawText(M + 14, y0 + 12, "IN BRIEF", 3, WHITE);
-  const items: string[] = [
-    "Indonesia: candy factory fire in Cikande kills 3; 36 missing.",
-    "West Bank: settlers torch 12 vehicles; Israel opens inquiry.",
-    "Nigeria: boat capsizes on the way to a funeral; 24 dead.",
-    "Space: BepiColombo in Mercury orbit; ESA reports a glitch.",
-    "Obituary: Paolo Bulgari, jeweller and luxury icon, dies at 89.",
+  const y0 = 954;
+  fillRect(MX, y0, CW, 40, INK);
+  drawText(MX + 12, y0 + 13, "IN BRIEF", 2, WHITE, { bold: true });
+  const items: Array<[number, string]> = [
+    [150, "Obituary: Paolo Bulgari dies at 89"],
+    [420, "Miley Cyrus marries Maxx Morando"],
+    [680, "GTA 6 launch sets $3.79bn record"],
   ];
-  const colW = 460;
-  items.forEach((it, i) => {
-    const col = i < 3 ? 0 : 1;
-    const row = i < 3 ? i : i - 3;
-    const x = M + 14 + col * (colW + 30);
-    const y = y0 + 44 + row * 18;
-    fillRect(x, y + 3, 8, 8, RED);
-    drawText(x + 14, y, it, 1, WHITE);
-  });
-}
-
-function drawFooter(): void {
-  hline(M, 978, CW, INK, 1);
-  drawTextCentered(W / 2, 988, "SUNDAY 22 NOVEMBER 2026  -  SOURCES: AP, REUTERS, AFP", 2, GREY);
+  for (const [ix, text] of items) {
+    fillRect(MX + ix, y0 + 16, 7, 7, RED);
+    drawText(MX + ix + 13, y0 + 16, text, 1, WHITE);
+  }
 }
 
 // ---------------------------------------------------------------- PNG encode
@@ -554,10 +652,7 @@ function encodePng(): Buffer {
   ihdr.writeUInt32BE(W, 0);
   ihdr.writeUInt32BE(H, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
+  ihdr[9] = 6; // colour type RGBA
   const raw = Buffer.alloc(H * (1 + W * 4));
   for (let y = 0; y < H; y++) {
     raw[y * (1 + W * 4)] = 0; // filter: none
@@ -574,16 +669,13 @@ function encodePng(): Buffer {
 
 // ---------------------------------------------------------------- build
 function main(): void {
-  frame(14, 14, W - 28, H - 28, INK, 3);
-  frame(22, 22, W - 44, H - 44, INK, 1);
+  frame(10, 10, W - 20, H - 20, INK, 3);
+  frame(17, 17, W - 34, H - 34, INK, 1);
   drawMasthead();
   drawLead();
-  hline(M, 452, CW, INK, 2);
-  drawRow2();
-  hline(M, 654, CW, INK, 2);
-  drawRow3();
+  drawMarkets();
+  drawRegions();
   drawInBrief();
-  drawFooter();
 
   const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
   mkdirSync(outDir, { recursive: true });
